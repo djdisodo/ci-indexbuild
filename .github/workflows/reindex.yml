@@ -1,0 +1,114 @@
+name: Reindex Alpine Repo
+
+on:
+  repository_dispatch:
+    types: [alpine-reindex]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alpine-reindex-global
+  cancel-in-progress: true
+
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID || secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.R2_BUCKET || secrets.R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY }}
+      APK_REPO_SIGNING_KEY_B64: ${{ secrets.APK_REPO_SIGNING_KEY_B64 }}
+      APK_REPO_SIGNING_KEY_PUBLIC_NAME: ${{ vars.APK_REPO_SIGNING_KEY_PUBLIC_NAME }}
+      SIGN_REPO_INDEX: ${{ vars.SIGN_REPO_INDEX || '0' }}
+      TRUSTED_APK_KEYS_DIR: ${{ vars.TRUSTED_APK_KEYS_DIR || 'trusted/apk-keys' }}
+      AWS_REGION: auto
+      REPO_PREFIX: ${{ vars.REPO_PREFIX }}
+      STATE_PREFIX: ${{ vars.STATE_PREFIX }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          [[ -n "${R2_ACCOUNT_ID}" ]] || { echo "R2_ACCOUNT_ID is required"; exit 1; }
+          [[ -n "${R2_BUCKET}" ]] || { echo "R2_BUCKET is required"; exit 1; }
+          [[ -n "${AWS_ACCESS_KEY_ID}" ]] || { echo "R2_ACCESS_KEY_ID is required"; exit 1; }
+          [[ -n "${AWS_SECRET_ACCESS_KEY}" ]] || { echo "R2_SECRET_ACCESS_KEY is required"; exit 1; }
+          if [[ "${SIGN_REPO_INDEX}" == "1" ]]; then
+            [[ -n "${APK_REPO_SIGNING_KEY_B64}" ]] || { echo "APK_REPO_SIGNING_KEY_B64 secret is required when SIGN_REPO_INDEX=1"; exit 1; }
+          fi
+
+      - name: Validate trusted credential inventory
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_trusted_credentials.py \
+            --config .github/trusted-credentials.json
+
+      - name: Skip if this run is stale
+        id: latest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          skip="$(scripts/ensure_latest_run.sh)"
+          echo "skip=${skip}" >> "$GITHUB_OUTPUT"
+          if [[ "${skip}" == "true" ]]; then
+            echo "A newer run already exists for this workflow/event."
+          fi
+
+      - name: Setup Python
+        if: steps.latest.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        if: steps.latest.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r scripts/requirements.txt
+
+      - name: Prepare repository signing key
+        if: steps.latest.outputs.skip != 'true' && env.SIGN_REPO_INDEX == '1'
+        run: |
+          set -euo pipefail
+          key_out="${RUNNER_TEMP}/apk-repo-signing.rsa"
+          printf '%s' "${APK_REPO_SIGNING_KEY_B64}" | base64 -d > "${key_out}"
+          chmod 600 "${key_out}"
+          echo "APK_REPO_SIGNING_KEY_PATH=${key_out}" >> "${GITHUB_ENV}"
+
+      - name: Reindex dirty paths
+        if: steps.latest.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          extra_args=()
+          if [[ -n "${TRUSTED_APK_KEYS_DIR}" && -d "${TRUSTED_APK_KEYS_DIR}" ]]; then
+            extra_args+=(--trusted-keys-dir "${TRUSTED_APK_KEYS_DIR}")
+          fi
+          if [[ "${SIGN_REPO_INDEX}" == "1" ]]; then
+            extra_args+=(--signing-key-file "${APK_REPO_SIGNING_KEY_PATH}")
+            if [[ -n "${APK_REPO_SIGNING_KEY_PUBLIC_NAME}" ]]; then
+              extra_args+=(--signing-key-public-name "${APK_REPO_SIGNING_KEY_PUBLIC_NAME}")
+            fi
+          fi
+          python3 scripts/reindex_dirty.py \
+            --bucket "${R2_BUCKET}" \
+            --account-id "${R2_ACCOUNT_ID}" \
+            --repo-prefix "${REPO_PREFIX:-alpine/}" \
+            --state-prefix "${STATE_PREFIX:-_state/dirty/}" \
+            --event-json "${GITHUB_EVENT_PATH}" \
+            "${extra_args[@]}"
+
+      - name: Cleanup repository signing key
+        if: always() && steps.latest.outputs.skip != 'true' && env.SIGN_REPO_INDEX == '1'
+        run: |
+          set -euo pipefail
+          rm -f "${APK_REPO_SIGNING_KEY_PATH:-}"

@@ -1,0 +1,17 @@
+name = "alpine-dirty-flag-worker"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+account_id = "REPLACE_WITH_ACCOUNT_ID"
+
+[vars]
+ALPINE_PREFIX = "alpine/"
+DIRTY_PREFIX = "_state/dirty/"
+
+[[r2_buckets]]
+binding = "REPO_BUCKET"
+bucket_name = "REPLACE_WITH_BUCKET_NAME"
+
+[[queues.consumers]]
+queue = "REPLACE_WITH_R2_EVENT_QUEUE"
+max_batch_size = 100
+max_batch_timeout = 5

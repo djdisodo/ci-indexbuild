@@ -1,0 +1,24 @@
+# Local CI test artifacts
+.act/
+.act-tmp/
+
+# Python cache/virtualenv
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local secret/env files
+.env
+.env.*
+*.env
+*.secrets
+*.secret
+
+# Private key material
+*.pem
+*.key
+*.rsa
+
+# Node install artifacts (worker)
+cloudflare/dirty-flag-worker/node_modules/

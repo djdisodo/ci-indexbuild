@@ -23,7 +23,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY }}
       APK_REPO_SIGNING_KEY_B64: ${{ secrets.APK_REPO_SIGNING_KEY_B64 }}
       APK_REPO_SIGNING_KEY_PUBLIC_NAME: ${{ vars.APK_REPO_SIGNING_KEY_PUBLIC_NAME }}
-      SIGN_REPO_INDEX: ${{ vars.SIGN_REPO_INDEX || '0' }}
+      SIGN_REPO_INDEX: ${{ vars.SIGN_REPO_INDEX || '1' }}
       TRUSTED_APK_KEYS_DIR: ${{ vars.TRUSTED_APK_KEYS_DIR || 'trusted/apk-keys' }}
       AWS_REGION: auto
       REPO_PREFIX: ${{ vars.REPO_PREFIX }}

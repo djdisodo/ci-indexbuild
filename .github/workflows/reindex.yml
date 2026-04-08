@@ -1,8 +1,8 @@
-name: Reindex Alpine Repo
+name: Reindex Repo
 
 on:
   repository_dispatch:
-    types: [alpine-reindex]
+    types: [reindex]
   workflow_dispatch:
 
 permissions:
@@ -10,8 +10,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: alpine-reindex-global
-  cancel-in-progress: true
+  group: reindex-global
 
 jobs:
   reindex:

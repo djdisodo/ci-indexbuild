@@ -50,33 +50,19 @@ jobs:
           python3 scripts/validate_trusted_credentials.py \
             --config .github/trusted-credentials.json
 
-      - name: Skip if this run is stale
-        id: latest
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          skip="$(scripts/ensure_latest_run.sh)"
-          echo "skip=${skip}" >> "$GITHUB_OUTPUT"
-          if [[ "${skip}" == "true" ]]; then
-            echo "A newer run already exists for this workflow/event."
-          fi
-
       - name: Setup Python
-        if: steps.latest.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
       - name: Install dependencies
-        if: steps.latest.outputs.skip != 'true'
         run: |
           set -euo pipefail
           python3 -m pip install --upgrade pip
           python3 -m pip install -r scripts/requirements.txt
 
       - name: Prepare repository signing key
-        if: steps.latest.outputs.skip != 'true' && env.SIGN_REPO_INDEX == '1'
+        if: env.SIGN_REPO_INDEX == '1'
         run: |
           set -euo pipefail
           key_out="${RUNNER_TEMP}/apk-repo-signing.rsa"
@@ -85,7 +71,6 @@ jobs:
           echo "APK_REPO_SIGNING_KEY_PATH=${key_out}" >> "${GITHUB_ENV}"
 
       - name: Reindex dirty paths
-        if: steps.latest.outputs.skip != 'true'
         run: |
           set -euo pipefail
           extra_args=()
@@ -107,7 +92,7 @@ jobs:
             "${extra_args[@]}"
 
       - name: Cleanup repository signing key
-        if: always() && steps.latest.outputs.skip != 'true' && env.SIGN_REPO_INDEX == '1'
+        if: always() && env.SIGN_REPO_INDEX == '1'
         run: |
           set -euo pipefail
           rm -f "${APK_REPO_SIGNING_KEY_PATH:-}"

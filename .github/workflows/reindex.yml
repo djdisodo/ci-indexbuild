@@ -21,7 +21,7 @@ jobs:
       R2_BUCKET: ${{ vars.R2_BUCKET || secrets.R2_BUCKET }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY }}
-      APK_REPO_SIGNING_KEY_B64: ${{ secrets.APK_REPO_SIGNING_KEY_B64 }}
+      APK_REPO_SIGNING_KEY: ${{ secrets.APK_REPO_SIGNING_KEY }}
       APK_REPO_SIGNING_KEY_PUBLIC_NAME: ${{ vars.APK_REPO_SIGNING_KEY_PUBLIC_NAME }}
       SIGN_REPO_INDEX: ${{ vars.SIGN_REPO_INDEX || '1' }}
       TRUSTED_APK_KEYS_DIR: ${{ vars.TRUSTED_APK_KEYS_DIR || 'trusted/apk-keys' }}
@@ -41,7 +41,7 @@ jobs:
           [[ -n "${AWS_ACCESS_KEY_ID}" ]] || { echo "R2_ACCESS_KEY_ID is required"; exit 1; }
           [[ -n "${AWS_SECRET_ACCESS_KEY}" ]] || { echo "R2_SECRET_ACCESS_KEY is required"; exit 1; }
           if [[ "${SIGN_REPO_INDEX}" == "1" ]]; then
-            [[ -n "${APK_REPO_SIGNING_KEY_B64}" ]] || { echo "APK_REPO_SIGNING_KEY_B64 secret is required when SIGN_REPO_INDEX=1"; exit 1; }
+            [[ -n "${APK_REPO_SIGNING_KEY}" ]] || { echo "APK_REPO_SIGNING_KEY secret is required when SIGN_REPO_INDEX=1"; exit 1; }
           fi
 
       - name: Validate trusted credential inventory
@@ -66,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           key_out="${RUNNER_TEMP}/apk-repo-signing.rsa"
-          printf '%s' "${APK_REPO_SIGNING_KEY_B64}" | base64 -d > "${key_out}"
+          printf '%s' "${APK_REPO_SIGNING_KEY}" > "${key_out}"
           chmod 600 "${key_out}"
           echo "APK_REPO_SIGNING_KEY_PATH=${key_out}" >> "${GITHUB_ENV}"
 

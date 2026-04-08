@@ -47,7 +47,7 @@ Repository secrets:
 
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
-- `APK_REPO_SIGNING_KEY_B64` (required only when `SIGN_REPO_INDEX=1`)
+- `APK_REPO_SIGNING_KEY` (required only when `SIGN_REPO_INDEX=1`)
 
 Security note:
 

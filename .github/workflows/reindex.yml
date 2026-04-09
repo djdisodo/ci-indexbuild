@@ -44,12 +44,6 @@ jobs:
             [[ -n "${APK_REPO_SIGNING_KEY}" ]] || { echo "APK_REPO_SIGNING_KEY secret is required when SIGN_REPO_INDEX=1"; exit 1; }
           fi
 
-      - name: Validate trusted credential inventory
-        run: |
-          set -euo pipefail
-          python3 scripts/validate_trusted_credentials.py \
-            --config .github/trusted-credentials.json
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

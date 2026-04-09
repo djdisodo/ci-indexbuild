@@ -47,10 +47,10 @@ def main(argv: list[str]) -> int:
         return 1
 
     if os.environ.get("SIGN_REPO_INDEX", "0").strip() == "1":
-        signing_key_b64 = os.environ.get("APK_REPO_SIGNING_KEY_B64", "").strip()
+        signing_key_b64 = os.environ.get("APK_REPO_SIGNING_KEY", "").strip()
         if not signing_key_b64:
             print(
-                "[cred-check] SIGN_REPO_INDEX=1 but APK_REPO_SIGNING_KEY_B64 is missing",
+                "[cred-check] SIGN_REPO_INDEX=1 but APK_REPO_SIGNING_KEY is missing",
                 file=sys.stderr,
             )
             return 1

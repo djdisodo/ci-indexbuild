@@ -799,6 +799,10 @@ def main(argv: list[str]) -> int:
         print(f"[verify] using trusted apk keyring dir: {trusted_keys_dir}")
     if signing is not None:
         print(f"[sign] enabled repository index signing with key file: {signing.private_key_file}")
+        if signing.public_key_name:
+            print(f"[sign] using APKINDEX signature public key name: {signing.public_key_name}")
+        else:
+            print("[sign] using default APKINDEX signature public key name derived from private key")
 
     client = s3_client(args.account_id)
     marker_map = list_dirty_markers(client, args.bucket, state_prefix)

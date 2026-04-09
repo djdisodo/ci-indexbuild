@@ -96,6 +96,17 @@ Supported events:
 - `repository_dispatch` with type `alpine-reindex`
 - `workflow_dispatch`
 
+`workflow_dispatch` inputs (GitHub Web UI):
+
+- `targets` (optional): comma-separated repo paths such as `alpine/v3.23/main/riscv64`
+- `force_reindex` (optional, default `false`): when `true`, the run ignores dirty-marker selection and processes only `targets` (mapped to `--explicit-only`)
+
+Force reindex example from Web UI:
+
+1. Open **Actions** -> **Reindex Repo** -> **Run workflow**.
+2. Set `targets` to one or more paths (comma-separated).
+3. Set `force_reindex` to `true`.
+
 Optional target keys in payload:
 
 - `path`, `paths`, `prefix`, `prefixes`, `target`, `targets`

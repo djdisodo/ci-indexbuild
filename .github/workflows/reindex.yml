@@ -4,6 +4,17 @@ on:
   repository_dispatch:
     types: [reindex]
   workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Comma-separated repo paths to process (for example: alpine/v3.23/main/riscv64)'
+        required: false
+        type: string
+        default: ''
+      force_reindex:
+        description: 'Ignore dirty-marker selection and process only the explicit targets'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,7 +33,7 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY }}
       APK_REPO_SIGNING_KEY: ${{ secrets.APK_REPO_SIGNING_KEY }}
-      APK_REPO_SIGNING_KEY_PUBLIC_NAME: ${{ vars.APK_REPO_SIGNING_KEY_PUBLIC_NAME }}
+      APK_REPO_SIGNING_KEY_PUBLIC_NAME: ${{ vars.APK_REPO_SIGNING_KEY_PUBLIC_NAME || secrets.APK_REPO_SIGNING_KEY_PUBLIC_NAME }}
       SIGN_REPO_INDEX: ${{ vars.SIGN_REPO_INDEX || '1' }}
       TRUSTED_APK_KEYS_DIR: ${{ vars.TRUSTED_APK_KEYS_DIR || 'trusted/apk-keys' }}
       AWS_REGION: auto
@@ -65,9 +76,26 @@ jobs:
           echo "APK_REPO_SIGNING_KEY_PATH=${key_out}" >> "${GITHUB_ENV}"
 
       - name: Reindex dirty paths
+        env:
+          DISPATCH_TARGETS: ${{ github.event.inputs.targets || '' }}
+          DISPATCH_FORCE_REINDEX: ${{ github.event.inputs.force_reindex || 'false' }}
         run: |
           set -euo pipefail
           extra_args=()
+          dispatch_targets="${DISPATCH_TARGETS:-}"
+          dispatch_force="${DISPATCH_FORCE_REINDEX:-false}"
+
+          if [[ -n "${dispatch_targets}" ]]; then
+            extra_args+=(--targets "${dispatch_targets}")
+          fi
+          if [[ "${dispatch_force}" == "true" ]]; then
+            if [[ -z "${dispatch_targets}" ]]; then
+              echo "workflow_dispatch input 'targets' is required when force_reindex=true"
+              exit 1
+            fi
+            extra_args+=(--explicit-only)
+          fi
+
           if [[ -n "${TRUSTED_APK_KEYS_DIR}" && -d "${TRUSTED_APK_KEYS_DIR}" ]]; then
             extra_args+=(--trusted-keys-dir "${TRUSTED_APK_KEYS_DIR}")
           fi

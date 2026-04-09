@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -9,6 +10,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -203,7 +205,7 @@ def download_packages(client, bucket: str, objects: list[S3Object], dest_dir: pa
     return downloaded
 
 
-def verify_downloaded_with_trusted_keys(downloaded: list[DownloadedObject], trusted_keys_dir: str) -> None:
+def _trusted_key_files(trusted_keys_dir: str) -> list[pathlib.Path]:
     key_dir = pathlib.Path(trusted_keys_dir).resolve()
     if not key_dir.exists() or not key_dir.is_dir():
         raise RuntimeError(f"trusted keys directory not found: {key_dir}")
@@ -211,14 +213,107 @@ def verify_downloaded_with_trusted_keys(downloaded: list[DownloadedObject], trus
     key_files = sorted(key_dir.glob("*.pub"))
     if not key_files:
         raise RuntimeError(f"trusted keys directory has no .pub files: {key_dir}")
+    return key_files
 
+
+def _package_signature_key_name(apk_path: pathlib.Path) -> str:
+    try:
+        with tarfile.open(apk_path, "r:*") as archive:
+            for member in archive.getmembers():
+                if not member.isfile():
+                    continue
+                match = re.match(r"^\.SIGN\.[^.]+\.(?P<keyname>.+\.pub)$", member.name)
+                if match:
+                    return match.group("keyname")
+    except tarfile.TarError as err:
+        raise RuntimeError(f"failed to read package signature metadata: {apk_path}") from err
+
+    raise RuntimeError(f"package has no .SIGN entry and cannot be verified: {apk_path}")
+
+
+def _pkg_dir_for_downloaded(downloaded: list[DownloadedObject]) -> pathlib.Path:
     if not downloaded:
-        return
+        raise RuntimeError("cannot resolve package directory for empty download set")
 
     pkg_dir = downloaded[0].local_path.parent.resolve()
     for item in downloaded[1:]:
         if item.local_path.parent.resolve() != pkg_dir:
             raise RuntimeError("downloaded package directory mismatch; cannot run key verification safely")
+    return pkg_dir
+
+
+@contextlib.contextmanager
+def prepare_effective_trusted_keyring(downloaded: list[DownloadedObject], trusted_keys_dir: str):
+    key_dir = pathlib.Path(trusted_keys_dir).resolve()
+    key_files = _trusted_key_files(trusted_keys_dir)
+    if not downloaded:
+        yield str(key_dir)
+        return
+
+    required_key_names: set[str] = set()
+    for item in downloaded:
+        required_key_names.add(_package_signature_key_name(item.local_path))
+
+    existing_names = {path.name for path in key_files}
+    missing = sorted(name for name in required_key_names if name not in existing_names)
+    if not missing:
+        yield str(key_dir)
+        return
+
+    by_key_id: dict[str, list[pathlib.Path]] = defaultdict(list)
+    for path in key_files:
+        match = re.search(r"-(?P<keyid>[0-9a-fA-F]{8})\.rsa\.pub$", path.name)
+        if match:
+            by_key_id[match.group("keyid").lower()].append(path)
+
+    unresolved: list[str] = []
+    alias_pairs: list[tuple[str, str]] = []
+
+    with tempfile.TemporaryDirectory(prefix="apk-keyring-") as tmp:
+        staged_dir = pathlib.Path(tmp)
+        for src in key_files:
+            shutil.copy2(src, staged_dir / src.name)
+
+        for expected_name in missing:
+            match = re.search(r"-(?P<keyid>[0-9a-fA-F]{8})\.rsa\.pub$", expected_name)
+            if not match:
+                unresolved.append(f"{expected_name} (missing key-id suffix)")
+                continue
+
+            key_id = match.group("keyid").lower()
+            matches = by_key_id.get(key_id, [])
+            if len(matches) == 1:
+                src = matches[0]
+                shutil.copy2(src, staged_dir / expected_name)
+                alias_pairs.append((expected_name, src.name))
+                continue
+
+            if not matches:
+                unresolved.append(f"{expected_name} (no trusted key with id {key_id})")
+            else:
+                match_list = ", ".join(path.name for path in matches)
+                unresolved.append(f"{expected_name} (ambiguous key id {key_id}: {match_list})")
+
+        if unresolved:
+            joined = "; ".join(unresolved)
+            raise RuntimeError(
+                "trusted keyring is missing required signature key filenames: "
+                f"{joined}. Add matching .pub files to {key_dir}"
+            )
+
+        for alias_name, source_name in alias_pairs:
+            print(f"[verify] added key filename alias: {alias_name} -> {source_name}")
+
+        yield str(staged_dir)
+
+
+def verify_downloaded_with_trusted_keys(downloaded: list[DownloadedObject], trusted_keys_dir: str) -> None:
+    _trusted_key_files(trusted_keys_dir)
+    if not downloaded:
+        return
+
+    key_dir = pathlib.Path(trusted_keys_dir).resolve()
+    pkg_dir = _pkg_dir_for_downloaded(downloaded)
 
     cmd = [
         "docker",
@@ -578,63 +673,65 @@ def process_target(
             if dry_run:
                 for obj in sorted(apks, key=lambda x: x.key):
                     print(f"[dry-run] would download package: {obj.key}")
-            else:
-                downloaded = download_packages(client, bucket, apks, tmp_dir)
-                print(f"[pull] downloaded {len(downloaded)} packages")
-                if trusted_keys_dir is not None:
-                    verify_downloaded_with_trusted_keys(downloaded, trusted_keys_dir)
-                    print("[verify] package signatures matched trusted keyring")
-
-        if dry_run and apks:
-            # For dry-run we still need local files to evaluate duplicate detection and pruning.
             downloaded = download_packages(client, bucket, apks, tmp_dir)
+            print(f"[pull] downloaded {len(downloaded)} packages")
 
-        initial_index = build_apkindex(tmp_dir, trusted_keys_dir=trusted_keys_dir)
-        entries = parse_apkindex(initial_index)
-        comparator = ApkVersionComparator()
-        latest_by_pkg, duplicates = choose_latest_versions(entries, comparator)
-
-        print(
-            f"[scan] index_entries={len(entries)} duplicate_packages={len(duplicates)}"
+        keyring_ctx = (
+            prepare_effective_trusted_keyring(downloaded, trusted_keys_dir)
+            if trusted_keys_dir is not None and downloaded
+            else contextlib.nullcontext(trusted_keys_dir)
         )
+        with keyring_ctx as effective_keys_dir:
+            if trusted_keys_dir is not None and downloaded and not dry_run:
+                verify_downloaded_with_trusted_keys(downloaded, effective_keys_dir)
+                print("[verify] package signatures matched trusted keyring")
 
-        keep_local, delete_local, unparsed_local = prune_local_packages(downloaded, latest_by_pkg)
-        print(
-            f"[prune] local_keep={len(keep_local)} local_delete={len(delete_local)} "
-            f"local_unparsed={len(unparsed_local)}"
-        )
+            initial_index = build_apkindex(tmp_dir, trusted_keys_dir=effective_keys_dir)
+            entries = parse_apkindex(initial_index)
+            comparator = ApkVersionComparator()
+            latest_by_pkg, duplicates = choose_latest_versions(entries, comparator)
 
-        for item in delete_local:
+            print(
+                f"[scan] index_entries={len(entries)} duplicate_packages={len(duplicates)}"
+            )
+
+            keep_local, delete_local, unparsed_local = prune_local_packages(downloaded, latest_by_pkg)
+            print(
+                f"[prune] local_keep={len(keep_local)} local_delete={len(delete_local)} "
+                f"local_unparsed={len(unparsed_local)}"
+            )
+
+            for item in delete_local:
+                if dry_run:
+                    print(f"[dry-run] would delete local old package: {item.local_path.name}")
+                else:
+                    item.local_path.unlink(missing_ok=True)
+
+            final_index = build_apkindex(tmp_dir, trusted_keys_dir=effective_keys_dir)
+            if not dry_run and signing is not None:
+                sign_apkindex(tmp_dir, signing)
+            elif dry_run and signing is not None:
+                print("[dry-run] would sign APKINDEX.tar.gz with repository signing key")
+            final_sha = sha256_file(final_index)
+
             if dry_run:
-                print(f"[dry-run] would delete local old package: {item.local_path.name}")
+                print(f"[dry-run] would upload index: {index_key} sha256={final_sha}")
             else:
-                item.local_path.unlink(missing_ok=True)
+                remote_sha = head_index_sha(client, bucket, index_key)
+                if remote_sha == final_sha:
+                    print(f"[index] unchanged hash for {index_key}; skipping upload")
+                else:
+                    upload_index(client, bucket, index_key, final_index, final_sha, run_id)
+                    print(f"[index] uploaded {index_key} sha256={final_sha}")
 
-        final_index = build_apkindex(tmp_dir, trusted_keys_dir=trusted_keys_dir)
-        if not dry_run and signing is not None:
-            sign_apkindex(tmp_dir, signing)
-        elif dry_run and signing is not None:
-            print("[dry-run] would sign APKINDEX.tar.gz with repository signing key")
-        final_sha = sha256_file(final_index)
-
-        if dry_run:
-            print(f"[dry-run] would upload index: {index_key} sha256={final_sha}")
-        else:
-            remote_sha = head_index_sha(client, bucket, index_key)
-            if remote_sha == final_sha:
-                print(f"[index] unchanged hash for {index_key}; skipping upload")
+            remote_delete_keys = [item.obj.key for item in delete_local]
+            if dry_run:
+                for key in remote_delete_keys:
+                    print(f"[dry-run] would delete remote old package: {key}")
             else:
-                upload_index(client, bucket, index_key, final_index, final_sha, run_id)
-                print(f"[index] uploaded {index_key} sha256={final_sha}")
-
-        remote_delete_keys = [item.obj.key for item in delete_local]
-        if dry_run:
-            for key in remote_delete_keys:
-                print(f"[dry-run] would delete remote old package: {key}")
-        else:
-            delete_keys(client, bucket, remote_delete_keys)
-            if remote_delete_keys:
-                print(f"[cleanup] deleted {len(remote_delete_keys)} remote old packages")
+                delete_keys(client, bucket, remote_delete_keys)
+                if remote_delete_keys:
+                    print(f"[cleanup] deleted {len(remote_delete_keys)} remote old packages")
 
     maybe_clear_marker(client, bucket, target, dry_run=dry_run)
 

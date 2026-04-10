@@ -178,6 +178,34 @@ def parse_local_apk_filename(local_name: str) -> tuple[str, str] | None:
     return pkg_name, f"{version}-r{release}"
 
 
+def parse_apk_pkginfo_identity(apk_path: pathlib.Path) -> tuple[str, str] | None:
+    try:
+        with tarfile.open(apk_path, "r:*") as archive:
+            file_obj = archive.extractfile(".PKGINFO")
+            if file_obj is None:
+                return None
+            text = file_obj.read().decode("utf-8", errors="replace")
+    except tarfile.TarError:
+        return None
+
+    pkg_name = ""
+    pkg_ver = ""
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key == "pkgname" and value:
+            pkg_name = value
+        elif key == "pkgver" and value:
+            pkg_ver = value
+
+    if not pkg_name or not pkg_ver:
+        return None
+    return pkg_name, pkg_ver
+
+
 def sha256_file(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -522,7 +550,10 @@ def prune_local_packages(downloaded: list[DownloadedObject], latest_by_pkg: dict
     unparsed: list[DownloadedObject] = []
 
     for item in downloaded:
-        parsed = parse_local_apk_filename(item.local_path.name)
+        parsed = parse_apk_pkginfo_identity(item.local_path)
+        if parsed is None:
+            # Backward-compatible fallback for odd/corrupt files where .PKGINFO is missing.
+            parsed = parse_local_apk_filename(item.local_path.name)
         if not parsed:
             keep.append(item)
             unparsed.append(item)
